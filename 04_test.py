@@ -274,10 +274,11 @@ def build_model(arch: str, backbone: str) -> nn.Module:
 # GUARDADO
 # ===========================================================================
 
-def save_metrics(metrics: dict, output_dir: Path, name: str,
+def save_metrics(metrics: dict, conf: torch.Tensor, output_dir: Path, name: str,
                  arch: str, backbone: str, n_images: int):
     # --- TXT ---
     raw_vals = list(IDX_TO_RAW.values())
+    conf_np  = conf.cpu().numpy().astype(np.int64)
     lines = [
         f"Evaluación TEST    : {name}",
         f"Arquitectura       : {arch}",
@@ -311,6 +312,21 @@ def save_metrics(metrics: dict, output_dir: Path, name: str,
             f"{metrics['precision_per_class'][i]:>8.4f}  "
             f"{metrics['recall_per_class'][i]:>8.4f}"
         )
+
+    # Matriz de confusión (conteos absolutos de píxeles): filas = referencia, columnas = predicción
+    lines += [
+        "",
+        "=" * 50,
+        "MATRIZ DE CONFUSIÓN (píxeles)",
+        "filas = clase real (referencia)  |  columnas = clase predicha",
+        "=" * 50,
+    ]
+    col_header = "  " + " " * 12 + "".join(f"{('pred '+str(r)):>14}" for r in raw_vals)
+    lines.append(col_header)
+    for i, raw in enumerate(raw_vals):
+        row = "".join(f"{conf_np[i, j]:>14d}" for j in range(NUM_CLASSES))
+        lines.append(f"  {('real '+str(raw)):>12}{row}")
+
     txt_path = output_dir / f"test_metrics_{name}.txt"
     txt_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"  Métricas TXT  : {txt_path}")
@@ -325,10 +341,57 @@ def save_metrics(metrics: dict, output_dir: Path, name: str,
         "include_background": INCLUDE_BACKGROUND,
         "class_values": raw_vals,
         "metrics": metrics,
+        "confusion_matrix": conf_np.tolist(),
+        "confusion_matrix_axes": "rows=real, cols=pred",
     }
     json_path = output_dir / f"test_metrics_{name}.json"
     json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"  Métricas JSON : {json_path}")
+
+
+def save_confusion_figure(conf: torch.Tensor, output_dir: Path, name: str):
+    """
+    Genera figura de la matriz de confusión en dos paneles:
+      izquierda  → conteos absolutos
+      derecha    → normalizada por fila (recall por clase)
+    Filas = clase real, columnas = clase predicha.
+    """
+    conf_np = conf.cpu().numpy().astype(np.float64)
+    row_sums = conf_np.sum(axis=1, keepdims=True)
+    conf_norm = conf_np / (row_sums + 1e-8)
+
+    raw_vals = list(IDX_TO_RAW.values())
+    labels   = [str(r) for r in raw_vals]
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), constrained_layout=True)
+    fig.suptitle(f"Matriz de confusión — {name}", fontsize=13, fontweight="bold")
+
+    panels = [
+        (axes[0], conf_np,   "Conteos absolutos", "d",   "Blues"),
+        (axes[1], conf_norm, "Normalizada por fila (recall)", ".2f", "Greens"),
+    ]
+    for ax, mat, title, fmt, cmap in panels:
+        im = ax.imshow(mat, cmap=cmap, aspect="auto")
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("Predicción")
+        ax.set_ylabel("Referencia (real)")
+        ax.set_xticks(range(NUM_CLASSES)); ax.set_xticklabels(labels)
+        ax.set_yticks(range(NUM_CLASSES)); ax.set_yticklabels(labels)
+        # Anotar cada celda
+        thresh = mat.max() / 2.0 if mat.max() > 0 else 0.5
+        for i in range(NUM_CLASSES):
+            for j in range(NUM_CLASSES):
+                val = mat[i, j]
+                txt = f"{int(val):d}" if fmt == "d" else f"{val:.2f}"
+                ax.text(j, i, txt, ha="center", va="center", fontsize=9,
+                        color="white" if val > thresh else "black")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    for ext in ("png", "svg"):
+        fig.savefig(output_dir / f"test_confusion_{name}.{ext}", dpi=150,
+                    bbox_inches="tight", format=ext)
+    plt.close(fig)
+    print(f"  Matriz conf.  : test_confusion_{name}.png / .svg")
 
 
 def save_comparison_figure(samples: list, output_dir: Path, name: str):
@@ -429,7 +492,8 @@ def evaluate_one(arch: str, backbone: str, loader: DataLoader, n_images: int):
     metrics = metrics_from_confusion(conf)
 
     print(f"  Guardando resultados de {name}...")
-    save_metrics(metrics, results_dir, name, arch, backbone, n_images)
+    save_metrics(metrics, conf, results_dir, name, arch, backbone, n_images)
+    save_confusion_figure(conf, results_dir, name)
     save_comparison_figure(fig_samples, results_dir, name)
     print(f"  Máscaras PNG  : {masks_dir}  ({n_images} archivos)")
 
