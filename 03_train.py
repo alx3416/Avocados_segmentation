@@ -52,7 +52,7 @@ IGNORE_INDEX       = 255
 NUM_CLASSES        = 4 if INCLUDE_BACKGROUND else 3
 
 # --- Hiperparámetros de entrenamiento ---
-EPOCHS      = 2
+EPOCHS      = 50
 BATCH_SIZE  = 8
 LR          = 1e-4
 NUM_WORKERS = 4       # usar 0 en Windows si hay errores de multiprocessing
